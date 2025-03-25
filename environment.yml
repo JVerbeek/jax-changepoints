@@ -1,0 +1,16 @@
+name: jax
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - blackjax
+  - ipykernel
+  - jax==0.4.28
+  - matplotlib
+  - python=3.11
+  - flax
+  - jaxtyping
+  - pymc
+  - distrax
+  - seaborn
+prefix: /home/janneke/miniforge3/envs/jax

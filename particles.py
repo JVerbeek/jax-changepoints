@@ -1,31 +1,21 @@
-
-import os
-os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
-
 import jax
-from jax import config
-#config.update("jax_enable_x64", True)
+# from jax import config
+# config.update("jax_enable_x64", True)  We should turn this on again at some point, but now it led to some errors.
 import jax.tree_util as jtu
-from abc import ABC
 from flax import nnx
-from flax import linen
 import jax.random as jr
 from jaxtyping import install_import_hook
-with install_import_hook("gpjax", "beartype.beartype"):
+with install_import_hook("gpjax", "beartype.beartype"):  # Local import!
     import GPJax.gpjax as gpx
-from jax.sharding import Mesh, PartitionSpec, NamedSharding
 import jax.numpy as jnp
 from datetime import datetime
 import blackjax 
 from blackjax.smc import resampling
 import tensorflow_probability.substrates.jax.distributions as tfd
 import numpy as np
-import seaborn as sns
-from blackjax.types import Array, ArrayLikeTree, ArrayTree, PRNGKey
+from blackjax.types import ArrayLikeTree
 import matplotlib.pyplot as plt
 import matplotlib
-from typing import Callable, NamedTuple, Optional, List
-from jax_changepoint import ChangePoints
 
 @nnx.jit
 def create_sharded_model(particles):
@@ -35,30 +25,46 @@ def create_sharded_model(particles):
   nnx.update(particles, sharded_state)           # The model is sharded now!
   return particles
 
-def set_priors(posterior, prior_dict):
+def set_priors(posterior: gpx.gps.AbstractPosterior, prior_dict):
+    """Set priors for variables in GPJax Posterior.
+
+    Arguments:
+        posterior -- GPJax posterior, should be instance of Abstract posterior.
+        prior_dict -- Nested dictionary, containing variable: tfd.Distribution pairs.  
+
+    Returns:
+        Posterior with priors set.
+    """
     graphdef, params, *static_state = nnx.split(posterior, nnx.VariableState, ...)
     params = gpx.parameters.set_priors(params, param_priors=prior_dict)
     posterior_new = nnx.merge(graphdef, params)
     return posterior_new
 
-def init_particles(posterior, num_particles, key) -> ArrayLikeTree:
-    graphdef, params, *static_state = nnx.split(posterior, nnx.VariableState, ...)
-    params_flat, struct = jtu.tree_flatten(params, lambda x: isinstance(x, nnx.VariableState))
+def init_particles(posterior: gpx.gps.AbstractPosterior, num_particles: int, rng_key: jax.random.PRNGKey) -> ArrayLikeTree:
+    """Initialize particles in Posterior object. Every Parameter (or VariableState) in the Posterior is updated to contain
+    num_particles samples from its prior distribution, such that the parameter is now (num_particles, shape_of_param).
+
+    Arguments:
+        posterior -- GPJax posterior, should be instance of abstract posterior class.
+        num_particles -- the number of particles.
+        rng_key -- jax.PRNGKey for sampling the prior.
+
+    Returns:
+        _description_
+    """
+    graphdef, params, *static_state = nnx.split(posterior, nnx.VariableState, ...)    # Split Posterior nnx.Module to PyTree of params. 
+    params_flat, struct = jtu.tree_flatten(params, lambda x: isinstance(x, nnx.VariableState))   # Flatten that PyTree.
     particles = []
     for param in params_flat:   # Iterate param1, param2, ... paramN
-        key, subkey = jr.split(key)
-        if param._tag == "static":
-            particles.append(param)
-            continue
-        else:
-            param.value = param.prior.sample(seed=subkey, sample_shape=tuple([num_particles] + list(param.value.shape)))
-            particles.append(param)
+        key, subkey = jr.split(rng_key)
+        param.value = param.prior.sample(seed=subkey, sample_shape=tuple([num_particles] + list(param.value.shape)))   # Sample from prior.
+        particles.append(param)
     particle_params = jtu.tree_unflatten(struct, particles)
     particles = nnx.merge(graphdef, particle_params)
     return particles   # list of posteriors
 
 
-class Particles: ## Container object for particles
+class Particles:
     def __init__(self, particles: nnx.State, data: gpx.Dataset, graphdef):
         self.particles = particles
         self.data = data
@@ -84,61 +90,6 @@ class Particles: ## Container object for particles
     def tree_unflatten(cls, aux_data, children):
         return cls(children)
 
-    
-def _smc_inference_loop(rng_key, smc_kernel, initial_state):
-    """Run the tempered SMC algorithm.
-
-    We run the adaptive algorithm until the tempering parameter lambda reaches the value
-    lambda=1.
-
-    """
-    def cond(carry):
-        i, state, _k = carry
-        return state.lmbda < 1
-
-    def one_step(carry):
-        i, state, k = carry
-        k, subk = jax.random.split(k, 2)
-        state, _ = smc_kernel(subk, state)
-        return i + 1, state, k
-
-    n_iter, final_state, _ = jax.lax.while_loop(
-        cond, one_step, (0, initial_state, rng_key)
-    )
-
-    return n_iter, final_state
-
-def smc(particles, data, graphdef, mesh, key):
-    part_object = Particles(particles, data, graphdef)
-    hmc_parameters = dict(step_size=1e-2, inverse_mass_matrix=jnp.eye(8), num_integration_steps=10
-        )
-    
-    rng_key, init_key, sample_key = jax.random.split(key, 3)
-    
-    def hmc_step(key, state, logdensity):
-        hmc = blackjax.hmc(logdensity, **hmc_parameters)
-        step = nnx.jit(hmc.step)
-        return step(key, state)
-
-    tempered = blackjax.adaptive_tempered_smc(
-        part_object.log_prior,
-        part_object.log_likelihood,
-        hmc_step,
-        blackjax.hmc.init,
-        mcmc_parameters={},
-        resampling_fn=resampling.systematic,
-        target_ess=0.9,
-        num_mcmc_steps=10,
-    )
-    
-    
-    initial_smc_state = particles
-    initial_smc_state = tempered.init(initial_smc_state)
-    n_iter, final_state = _smc_inference_loop(sample_key, tempered.step, initial_smc_state)
-    
-    print(final_state, "\n************************")
-    print("Number of steps in the adaptive algorithm: ", n_iter.item())
-    return final_state
 
 def plot_posterior(p, ax, D):
     
