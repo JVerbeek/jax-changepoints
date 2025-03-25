@@ -1,0 +1,3 @@
+[submodule "GPJax"]
+	path = GPJax
+	url = https://github.com/JVerbeek/GPJax.git
