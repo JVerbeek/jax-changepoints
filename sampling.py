@@ -51,7 +51,7 @@ def smc(particles, data, graphdef, mesh=None, key=jr.PRNGKey(42)):
         mcmc_parameters={},
         resampling_fn=resampling.systematic,
         target_ess=0.9,
-        num_mcmc_steps=10,
+        num_mcmc_steps=1,
     )
     
     
