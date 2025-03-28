@@ -17,6 +17,7 @@ def _smc_inference_loop(rng_key, smc_kernel, initial_state):
         i, state, _k = carry
         return state.lmbda < 1
 
+    @jax.jit
     def one_step(carry):
         i, state, k = carry
         k, subk = jax.random.split(k, 2)
@@ -29,11 +30,11 @@ def _smc_inference_loop(rng_key, smc_kernel, initial_state):
 
     return n_iter, final_state
 
-def smc(particles, data, graphdef, mesh=None, key=jr.PRNGKey(42)):
+def smc(particles, data, graphdef, ess=0.9, mcmc_steps=1, integration_steps=100, mesh=None, key=jr.PRNGKey(42)):
     part_object = Particles(particles, data, graphdef)
     
     inv_mass_dim = sum([p[0].size for p in jax.tree_util.tree_flatten(particles)[0]])
-    hmc_parameters = dict(step_size=1e-2, inverse_mass_matrix=jnp.eye(inv_mass_dim), num_integration_steps=10
+    hmc_parameters = dict(step_size=1e-2, inverse_mass_matrix=jnp.eye(inv_mass_dim), num_integration_steps=integration_steps
         )
     
     rng_key, init_key, sample_key = jax.random.split(key, 3)
@@ -50,8 +51,8 @@ def smc(particles, data, graphdef, mesh=None, key=jr.PRNGKey(42)):
         blackjax.hmc.init,
         mcmc_parameters={},
         resampling_fn=resampling.systematic,
-        target_ess=0.9,
-        num_mcmc_steps=1,
+        target_ess=ess,
+        num_mcmc_steps=mcmc_steps,
     )
     
     
