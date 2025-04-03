@@ -52,12 +52,15 @@ def init_particles(posterior: gpx.gps.AbstractPosterior, num_particles: int, rng
     Returns:
         _description_
     """
+    def sample_prior():
+        return param.prior.sample(seed=subkey, sample_shape=tuple([num_particles] + list(param.value.shape)))   # Sample from prior.
     graphdef, params, *static_state = nnx.split(posterior, nnx.VariableState, ...)    # Split Posterior nnx.Module to PyTree of params. 
     params_flat, struct = jtu.tree_flatten(params, lambda x: isinstance(x, nnx.VariableState))   # Flatten that PyTree.
     particles = []
     for param in params_flat:   # Iterate param1, param2, ... paramN
         key, subkey = jr.split(rng_key)
-        param.value = param.prior.sample(seed=subkey, sample_shape=tuple([num_particles] + list(param.value.shape)))   # Sample from prior.
+        param.value = sample_prior()
+        param.sharding = ( "model",)
         particles.append(param)
     particle_params = jtu.tree_unflatten(struct, particles)
     particles = nnx.merge(graphdef, particle_params)
@@ -154,52 +157,3 @@ def plot_distributions(state: gpx.gps.AbstractPosterior):
     plt.show()
     return 
     
-if __name__ == "__main__":
-    key = jr.PRNGKey(42) 
-    t = datetime.now()
-    print(t)
-    N_particles = 8
-    key, subkey = jr.split(key)
-    data = np.load("/home/janneke/changepoint-gp/notebooks/multiple-cp/data.npz")
-    X = data["X"]
-    y = data["y"]
-    # plt.plot(X, y, "kx")
-    # plt.show()
-    D = gpx.Dataset(X=X, y=y)
-
-    #xtest = jnp.linspace(-3.5, 3.5, 500).reshape(-1, 1)
-
-    kernel = gpx.kernels.RBF() 
-    #kernel = gpx.kernels.RBF()
-    meanf = gpx.mean_functions.Zero()
-    prior = gpx.gps.Prior(mean_function=meanf, kernel=kernel)
-    likelihood = gpx.likelihoods.Gaussian(num_datapoints=D.n)
-
-    posterior = prior * likelihood
-    graphdef, params, *static_state = nnx.split(posterior, gpx.parameters.Parameter, ...)
-
-    prior_dict = {"prior": {"kernel": {"variance": tfd.LogNormal(1, 1), "lengthscale": tfd.LogNormal(1, 1)},
-                            "mean_function": {"constant": tfd.Normal(0, 1)}},
-                    "latent": {"obs_stddev": tfd.Normal(1, 1)}}
-                    
-
-    # prior_dict = {"prior": {"kernel": {"kernels": {0: {"variance": tfd.LogNormal(0, 1), "lengthscale": tfd.LogNormal(1, 1)},
-    #                                                1: {"variance": tfd.LogNormal(0, 1), "lengthscale": tfd.LogNormal(1, 1)}},
-    #                                     "locations": tfd.Uniform(0, len(X)),
-    #                                     "steepness": tfd.Uniform(0, 10)},
-    #                         "mean_function": {"constant": tfd.Normal(0, 1)}},
-    #                         "likelihood": {"obs_stddev": tfd.LogNormal(1, 1)}}
-
-    posterior = set_priors(posterior, prior_dict)
-    particle_list = init_particles(posterior, N_particles, key) 
-    with mesh:
-        state_sharded = create_sharded_model(particle_list)
-    params_bijection = gpx.parameters.DEFAULT_BIJECTION
-    graphdef, params, *static_state = nnx.split(particle_list, nnx.VariableState, ...)
-    params = gpx.parameters.transform(params, params_bijection, inverse=True)
-    key, smc_key = jr.split(key)
-    final_state = smc(params, D, graphdef, smc_key)
-    params = gpx.parameters.transform(params, params_bijection)
-    final_particles = nnx.merge(graphdef, final_state.particles)  
-    dt = datetime.now() - t
-    print("Sampling took", dt.total_seconds())

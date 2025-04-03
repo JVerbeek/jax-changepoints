@@ -1,4 +1,6 @@
 # Enable Float64 for more stable matrix inversions.
+import sys
+sys.path.append("/home/janneke/jax-smc/GPJax")
 from jax import config
 import jax.scipy as jsp
 import jax.numpy as jnp

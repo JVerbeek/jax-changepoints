@@ -30,7 +30,7 @@ def _smc_inference_loop(rng_key, smc_kernel, initial_state):
 
     return n_iter, final_state
 
-def smc(particles, data, graphdef, ess=0.9, mcmc_steps=1, integration_steps=100, mesh=None, key=jr.PRNGKey(42)):
+def smc(particles, data, graphdef, ess=0.9, mcmc_steps=1, integration_steps=20, mesh=None, key=jr.PRNGKey(42)):
     part_object = Particles(particles, data, graphdef)
     
     inv_mass_dim = sum([p[0].size for p in jax.tree_util.tree_flatten(particles)[0]])
@@ -44,13 +44,14 @@ def smc(particles, data, graphdef, ess=0.9, mcmc_steps=1, integration_steps=100,
         step = nnx.jit(hmc.step)
         return step(key, state)
 
+
     tempered = blackjax.adaptive_tempered_smc(
         part_object.log_prior,
         part_object.log_likelihood,
         hmc_step,
         blackjax.hmc.init,
         mcmc_parameters={},
-        resampling_fn=resampling.systematic,
+        resampling_fn=resampling.residual,
         target_ess=ess,
         num_mcmc_steps=mcmc_steps,
     )
